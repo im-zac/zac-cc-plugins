@@ -1,0 +1,12 @@
+{
+  "name": "discord",
+  "description": "Discord channel for Claude Code (opr.bot fork) — messaging bridge with interactive buttons and built-in access control.",
+  "version": "0.0.4-opr.1",
+  "keywords": [
+    "discord",
+    "messaging",
+    "channel",
+    "mcp",
+    "interactive"
+  ]
+}

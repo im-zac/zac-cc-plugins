@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-plugins",
+  "metadata": {
+    "description": "Zac's Claude Code plugins"
+  },
+  "owner": {
+    "name": "Zac"
+  },
+  "plugins": [
+    {
+      "name": "discord",
+      "description": "Discord channel for Claude Code — messaging bridge with interactive buttons and built-in access control.",
+      "version": "0.0.4-opr.1",
+      "source": "./discord",
+      "category": "productivity",
+      "tags": ["discord", "messaging", "channel", "interactive"]
+    }
+  ]
+}
