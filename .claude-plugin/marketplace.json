@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "claude-plugins",
+  "name": "zac-cc-plugins",
   "metadata": {
     "description": "Zac's Claude Code plugins"
   },
@@ -14,7 +14,12 @@
       "version": "0.0.4-opr.1",
       "source": "./discord",
       "category": "productivity",
-      "tags": ["discord", "messaging", "channel", "interactive"]
+      "tags": [
+        "discord",
+        "messaging",
+        "channel",
+        "interactive"
+      ]
     }
   ]
 }
