@@ -9,9 +9,9 @@ allowed-tools:
   - Bash(mkdir *)
 ---
 
-# /discord:configure — Discord Channel Setup
+# /discord-interactive:configure — Discord Channel Setup
 
-Writes the bot token to `~/.claude/channels/discord/.env` and orients the
+Writes the bot token to `~/.claude/channels/discord-interactive/.env` and orients the
 user on access policy. The server reads both files at boot.
 
 Arguments passed: `$ARGUMENTS`
@@ -24,10 +24,10 @@ Arguments passed: `$ARGUMENTS`
 
 Read both state files and give the user a complete picture:
 
-1. **Token** — check `~/.claude/channels/discord/.env` for
-   `DISCORD_BOT_TOKEN`. Show set/not-set; if set, show first 6 chars masked.
+1. **Token** — check `~/.claude/channels/discord-interactive/.env` for
+   `DISCORD_INTERACTIVE_BOT_TOKEN`. Show set/not-set; if set, show first 6 chars masked.
 
-2. **Access** — read `~/.claude/channels/discord/access.json` (missing file
+2. **Access** — read `~/.claude/channels/discord-interactive/access.json` (missing file
    = defaults: `dmPolicy: "pairing"`, empty allowlist). Show:
    - DM policy and what it means in one line
    - Allowed senders: count, and list display names or snowflakes
@@ -35,10 +35,10 @@ Read both state files and give the user a complete picture:
    - Guild channels opted in: count
 
 3. **What next** — end with a concrete next step based on state:
-   - No token → *"Run `/discord:configure <token>` with your bot token from
+   - No token → *"Run `/discord-interactive:configure <token>` with your bot token from
      the Developer Portal → Bot → Reset Token."*
    - Token set, policy is pairing, nobody allowed → *"DM your bot on
-     Discord. It replies with a code; approve with `/discord:access pair
+     Discord. It replies with a code; approve with `/discord-interactive:access pair
      <code>`."*
    - Token set, someone allowed → *"Ready. DM your bot to reach the
      assistant."*
@@ -54,13 +54,13 @@ Drive the conversation this way:
 2. Ask: *"Is that everyone who should reach you through this bot?"*
 3. **If yes and policy is still `pairing`** → *"Good. Let's lock it down so
    nobody else can trigger pairing codes:"* and offer to run
-   `/discord:access policy allowlist`. Do this proactively — don't wait to
+   `/discord-interactive:access policy allowlist`. Do this proactively — don't wait to
    be asked.
 4. **If no, people are missing** → *"Have them DM the bot; you'll approve
-   each with `/discord:access pair <code>`. Run this skill again once
+   each with `/discord-interactive:access pair <code>`. Run this skill again once
    everyone's in and we'll lock it."* Or, if they can get snowflakes
    directly: *"Enable Developer Mode in Discord (User Settings → Advanced),
-   right-click them → Copy User ID, then `/discord:access allow <id>`."*
+   right-click them → Copy User ID, then `/discord-interactive:access allow <id>`."*
 5. **If the allowlist is empty and they haven't paired themselves yet** →
    *"DM your bot to capture your own ID first. Then we'll add anyone else
    and lock it down."*
@@ -77,15 +77,15 @@ as the correct long-term choice. Don't skip the lockdown offer.
 1. Treat `$ARGUMENTS` as the token (trim whitespace). Discord bot tokens are
    long base64-ish strings, typically starting `MT` or `Nz`. Generated from
    Developer Portal → Bot → Reset Token; only shown once.
-2. `mkdir -p ~/.claude/channels/discord`
-3. Read existing `.env` if present; update/add the `DISCORD_BOT_TOKEN=` line,
+2. `mkdir -p ~/.claude/channels/discord-interactive`
+3. Read existing `.env` if present; update/add the `DISCORD_INTERACTIVE_BOT_TOKEN=` line,
    preserve other keys. Write back, no quotes around the value.
-4. `chmod 600 ~/.claude/channels/discord/.env` — the token is a credential.
+4. `chmod 600 ~/.claude/channels/discord-interactive/.env` — the token is a credential.
 5. Confirm, then show the no-args status so the user sees where they stand.
 
 ### `clear` — remove the token
 
-Delete the `DISCORD_BOT_TOKEN=` line (or the file if that's the only line).
+Delete the `DISCORD_INTERACTIVE_BOT_TOKEN=` line (or the file if that's the only line).
 
 ---
 
@@ -96,4 +96,4 @@ Delete the `DISCORD_BOT_TOKEN=` line (or the file if that's the only line).
 - The server reads `.env` once at boot. Token changes need a session restart
   or `/reload-plugins`. Say so after saving.
 - `access.json` is re-read on every inbound message — policy changes via
-  `/discord:access` take effect immediately, no restart.
+  `/discord-interactive:access` take effect immediately, no restart.

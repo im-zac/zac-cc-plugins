@@ -53,12 +53,12 @@ Install the plugin:
 **5. Give the server the token.**
 
 ```
-/discord:configure MTIz...
+/discord-interactive:configure MTIz...
 ```
 
-Writes `DISCORD_BOT_TOKEN=...` to `~/.claude/channels/discord/.env`. You can also write that file by hand, or set the variable in your shell environment — shell takes precedence.
+Writes `DISCORD_INTERACTIVE_BOT_TOKEN=...` to `~/.claude/channels/discord-interactive/.env`. You can also write that file by hand, or set the variable in your shell environment — shell takes precedence.
 
-> To run multiple bots on one machine (different tokens, separate allowlists), point `DISCORD_STATE_DIR` at a different directory per instance.
+> To run multiple bots on one machine (different tokens, separate allowlists), point `DISCORD_INTERACTIVE_STATE_DIR` at a different directory per instance.
 
 **6. Relaunch with the channel flag.**
 
@@ -73,14 +73,14 @@ claude --channels plugin:discord@claude-plugins-official
 With Claude Code running from the previous step, DM your bot on Discord — it replies with a pairing code. If the bot doesn't respond, make sure your session is running with `--channels`. In your Claude Code session:
 
 ```
-/discord:access pair <code>
+/discord-interactive:access pair <code>
 ```
 
 Your next DM reaches the assistant.
 
 **8. Lock it down.**
 
-Pairing is for capturing IDs. Once you're in, switch to `allowlist` so strangers don't get pairing-code replies. Ask Claude to do it, or `/discord:access policy allowlist` directly.
+Pairing is for capturing IDs. Once you're in, switch to `allowlist` so strangers don't get pairing-code replies. Ask Claude to do it, or `/discord-interactive:access policy allowlist` directly.
 
 ## Access control
 
@@ -96,7 +96,7 @@ Quick reference: IDs are Discord **snowflakes** (numeric — enable Developer Mo
 | `react` | Add an emoji reaction to any message by ID. Unicode emoji work directly; custom emoji need `<:name:id>` form. |
 | `edit_message` | Edit a message the bot previously sent. Useful for "working…" → result progress updates. Only works on the bot's own messages. |
 | `fetch_messages` | Pull recent history from a channel (oldest-first). Capped at 100 per call. Each line includes the message ID so the model can `reply_to` it; messages with attachments are marked `+Natt`. Discord's search API isn't exposed to bots, so this is the only lookback. |
-| `download_attachment` | Download all attachments from a specific message by ID to `~/.claude/channels/discord/inbox/`. Returns file paths + metadata. Use when `fetch_messages` shows a message has attachments. |
+| `download_attachment` | Download all attachments from a specific message by ID to `~/.claude/channels/discord-interactive/inbox/`. Returns file paths + metadata. Use when `fetch_messages` shows a message has attachments. |
 
 Inbound messages trigger a typing indicator automatically — Discord shows
 "botname is typing…" while the assistant works on a response.
@@ -106,7 +106,7 @@ Inbound messages trigger a typing indicator automatically — Discord shows
 Attachments are **not** auto-downloaded. The `<channel>` notification lists
 each attachment's name, type, and size — the assistant calls
 `download_attachment(chat_id, message_id)` when it actually wants the file.
-Downloads land in `~/.claude/channels/discord/inbox/`.
+Downloads land in `~/.claude/channels/discord-interactive/inbox/`.
 
 Same path for attachments on historical messages found via `fetch_messages`
 (messages with attachments are marked `+Natt`).

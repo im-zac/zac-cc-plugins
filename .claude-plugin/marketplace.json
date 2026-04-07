@@ -12,7 +12,7 @@
       "name": "discord-interactive",
       "description": "Discord channel for Claude Code — messaging bridge with interactive buttons and built-in access control.",
       "version": "0.0.4-opr.1",
-      "source": "./discord",
+      "source": "./discord-interactive",
       "category": "productivity",
       "tags": [
         "discord",
