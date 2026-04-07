@@ -639,7 +639,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const text = args.text as string
         const reply_to = args.reply_to as string | undefined
         const files = (args.files as string[] | undefined) ?? []
-        const buttons = args.buttons as Array<{ id: string; label: string; style?: string }> | undefined
+        // Some MCP clients pass complex params as JSON-encoded strings rather
+        // than parsed objects — accept both forms.
+        const rawButtons = args.buttons
+        const buttons =
+          typeof rawButtons === 'string'
+            ? (JSON.parse(rawButtons) as Array<{ id: string; label: string; style?: string }>)
+            : (rawButtons as Array<{ id: string; label: string; style?: string }> | undefined)
         const details = args.details as string | undefined
 
         const ch = await fetchAllowedChannel(chat_id)
