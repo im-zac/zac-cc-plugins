@@ -28,6 +28,10 @@ import {
   type Message,
   type Attachment,
   type Interaction,
+  type MessageReaction,
+  type PartialMessageReaction,
+  type User,
+  type PartialUser,
 } from 'discord.js'
 import { randomBytes } from 'crypto'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync, chmodSync } from 'fs'
@@ -84,9 +88,13 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.DirectMessageReactions,
   ],
   // DMs arrive as partial channels — messageCreate never fires without this.
-  partials: [Partials.Channel],
+  // Reaction partials are needed for reactions on messages from before the
+  // bot connected (Discord sends partial Message/Reaction/User in that case).
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
 })
 
 type PendingEntry = {
@@ -467,6 +475,10 @@ const mcp = new Server(
       'Messages from Discord arrive as <channel source="discord" chat_id="..." message_id="..." user="..." ts="...">. If the tag has attachment_count, the attachments attribute lists name/type/size — call download_attachment(chat_id, message_id) to fetch them. Reply with the reply tool — pass chat_id back. Use reply_to (set to a message_id) only when replying to an earlier message; the latest message doesn\'t need a quote-reply, omit reply_to for normal responses.',
       '',
       'reply accepts file paths (files: ["/abs/path.png"]) for attachments. Use react to add emoji reactions, and edit_message for interim progress updates. Edits don\'t trigger push notifications — when a long task completes, send a new reply so the user\'s device pings.',
+      '',
+      'If a user replies to an earlier message using Discord\'s native reply, the inbound <channel> tag carries reply_to_id, reply_to_user, reply_to_is_self, and (truncated) reply_to_content — use those to figure out what the short reply is about.',
+      '',
+      'Emoji reactions on your own messages arrive as inbound events too: event="reaction_add", with emoji and target_content (truncated) pointing at the message that was reacted to. Content field is "(reaction <emoji>)". Treat reactions as lightweight acknowledgements — don\'t auto-reply unless the context clearly calls for it.',
       '',
       "fetch_messages pulls real Discord history. Discord's search API isn't available to bots — if the user asks you to find an old message, fetch more history or ask them roughly when it was.",
       '',
@@ -957,6 +969,65 @@ client.on('messageCreate', msg => {
   handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
 })
 
+client.on('messageReactionAdd', (reaction, user) => {
+  handleReaction(reaction, user).catch(e =>
+    process.stderr.write(`discord: handleReaction failed: ${e}\n`),
+  )
+})
+
+// Reactions are only surfaced for allowlisted senders reacting to the bot's
+// own messages. That keeps noise low and avoids a pairing branch (pairing
+// only makes sense for actual messages — you can't "reply" to a reaction).
+async function handleReaction(
+  reaction: MessageReaction | PartialMessageReaction,
+  user: User | PartialUser,
+): Promise<void> {
+  if (user.bot) return
+
+  // Partials arrive when the message predates the bot session. Fetch to
+  // materialize fields before we read them.
+  try {
+    if (reaction.partial) await reaction.fetch()
+    if (reaction.message.partial) await reaction.message.fetch()
+    if (user.partial) await user.fetch()
+  } catch {
+    return
+  }
+
+  const msg = reaction.message as Message
+  if (!msg.author || msg.author.id !== client.user?.id) return
+
+  const access = loadAccess()
+  if (!access.allowFrom.includes(user.id)) return
+
+  const emoji = reaction.emoji.id
+    ? `<:${reaction.emoji.name ?? ''}:${reaction.emoji.id}>`
+    : (reaction.emoji.name ?? '')
+
+  const targetText = (msg.content || '').slice(0, 500)
+  const username = (user as User).username ?? ''
+
+  void mcp.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      content: `(reaction ${emoji})`,
+      meta: {
+        chat_id: msg.channelId,
+        message_id: msg.id,
+        user: username,
+        user_id: user.id,
+        ts: new Date().toISOString(),
+        event: 'reaction_add',
+        emoji,
+        ...(targetText ? { target_content: targetText } : {}),
+        target_is_self: 'true',
+      },
+    },
+  }).catch(err => {
+    process.stderr.write(`discord-interactive channel: failed to deliver reaction: ${err}\n`)
+  })
+}
+
 async function handleInbound(msg: Message): Promise<void> {
   const result = await gate(msg)
 
@@ -1022,6 +1093,24 @@ async function handleInbound(msg: Message): Promise<void> {
   // forgeable by any allowlisted sender typing that string.
   const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
 
+  // If this message is a native Discord reply, pull the referenced message
+  // so the model sees what's being replied to. Truncated to keep meta small.
+  let replyMeta: Record<string, string> = {}
+  if (msg.reference?.messageId) {
+    try {
+      const ref = await msg.fetchReference()
+      const refText = (ref.content || '').slice(0, 500)
+      replyMeta = {
+        reply_to_id: ref.id,
+        reply_to_user: ref.author.username,
+        reply_to_is_self: String(ref.author.id === client.user?.id),
+        ...(refText ? { reply_to_content: refText } : {}),
+      }
+    } catch {
+      // Referenced message deleted / unreachable — skip silently.
+    }
+  }
+
   mcp.notification({
     method: 'notifications/claude/channel',
     params: {
@@ -1033,6 +1122,7 @@ async function handleInbound(msg: Message): Promise<void> {
         user_id: msg.author.id,
         ts: msg.createdAt.toISOString(),
         ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
+        ...replyMeta,
       },
     },
   }).catch(err => {
