@@ -1,7 +1,7 @@
 {
   "name": "line",
   "description": "LINE channel for Claude Code — messaging bridge with built-in access control via webhook.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "keywords": [
     "line",
     "messaging",

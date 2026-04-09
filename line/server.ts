@@ -90,10 +90,14 @@ function verifySignature(body: string, signature: string): boolean {
   return hash === signature
 }
 
+type SentMessage = { id: string; quoteToken?: string }
+
+// Returns the array of sent message IDs (in the same order as `messages`),
+// or undefined on failure.
 async function lineReply(
   replyToken: string,
   messages: Array<{ type: string; text?: string; [k: string]: unknown }>,
-): Promise<boolean> {
+): Promise<string[] | undefined> {
   const res = await fetch(`${LINE_API}/message/reply`, {
     method: 'POST',
     headers: {
@@ -102,13 +106,19 @@ async function lineReply(
     },
     body: JSON.stringify({ replyToken, messages }),
   })
-  return res.ok
+  if (!res.ok) return undefined
+  try {
+    const data = (await res.json()) as { sentMessages?: SentMessage[] }
+    return (data.sentMessages ?? []).map((m) => m.id)
+  } catch {
+    return []
+  }
 }
 
 async function linePush(
   to: string,
   messages: Array<{ type: string; text?: string; [k: string]: unknown }>,
-): Promise<boolean> {
+): Promise<string[] | undefined> {
   const res = await fetch(`${LINE_API}/message/push`, {
     method: 'POST',
     headers: {
@@ -117,7 +127,13 @@ async function linePush(
     },
     body: JSON.stringify({ to, messages }),
   })
-  return res.ok
+  if (!res.ok) return undefined
+  try {
+    const data = (await res.json()) as { sentMessages?: SentMessage[] }
+    return (data.sentMessages ?? []).map((m) => m.id)
+  } catch {
+    return []
+  }
 }
 
 async function lineGetProfile(userId: string): Promise<string | undefined> {
@@ -320,23 +336,73 @@ function gate(senderId: string, sourceType: string): GateResult {
 // ─── Reply token cache ──────────────────────────────────────────────
 // LINE reply tokens expire ~1 min. We cache them so the reply tool can
 // use them if called quickly, otherwise fall back to push message.
+// We also remember the chatId the token came from so outbound messages
+// sent via reply token get cached against the correct chat context.
 
-const replyTokenCache = new Map<
-  string,
-  { token: string; timestamp: number }
->()
+type ReplyTokenEntry = {
+  token: string
+  timestamp: number
+  chatId: string
+}
+const replyTokenCache = new Map<string, ReplyTokenEntry>()
 const REPLY_TOKEN_TTL = 50_000 // 50 seconds (conservative)
 
-function cacheReplyToken(userId: string, token: string): void {
-  replyTokenCache.set(userId, { token, timestamp: Date.now() })
+function cacheReplyToken(
+  userId: string,
+  token: string,
+  chatId: string,
+): void {
+  replyTokenCache.set(userId, { token, timestamp: Date.now(), chatId })
 }
 
-function consumeReplyToken(userId: string): string | undefined {
+function consumeReplyToken(
+  userId: string,
+): { token: string; chatId: string } | undefined {
   const entry = replyTokenCache.get(userId)
   if (!entry) return undefined
   replyTokenCache.delete(userId)
   if (Date.now() - entry.timestamp > REPLY_TOKEN_TTL) return undefined
-  return entry.token
+  return { token: entry.token, chatId: entry.chatId }
+}
+
+// ─── Message cache (for quote-reply context) ────────────────────────
+// LINE sends only `quotedMessageId` on reply — it does not expose the
+// quoted message's content. To give downstream consumers the actual
+// content/user of the quoted message, we keep an in-memory cache of
+// every message we see (inbound) or send (outbound). Bounded LRU-ish
+// eviction via FIFO on Map (insertion order).
+
+type CachedMessage = {
+  text: string // truncated content (or placeholder for non-text types)
+  user: string // display name for inbound, '(bot)' for outbound
+  userId: string // LINE userId for inbound, 'bot' for outbound
+  chatId: string // where the message lives (userId for DM, groupId/roomId otherwise)
+  ts: string // ISO 8601
+  isSelf: boolean // true if the bot sent it
+}
+
+const MAX_MESSAGE_CACHE = 1000
+const QUOTE_CONTENT_TRUNCATE = 200
+const messageCache = new Map<string, CachedMessage>()
+
+function cacheMessage(id: string, msg: CachedMessage): void {
+  if (messageCache.has(id)) {
+    messageCache.delete(id) // refresh insertion order
+  } else if (messageCache.size >= MAX_MESSAGE_CACHE) {
+    const oldest = messageCache.keys().next().value
+    if (oldest !== undefined) messageCache.delete(oldest)
+  }
+  messageCache.set(id, msg)
+}
+
+function lookupQuoted(id: string): CachedMessage | undefined {
+  return messageCache.get(id)
+}
+
+function truncateForQuote(s: string): string {
+  return s.length > QUOTE_CONTENT_TRUNCATE
+    ? s.slice(0, QUOTE_CONTENT_TRUNCATE) + '…'
+    : s
 }
 
 // ─── Approval polling ───────────────────────────────────────────────
@@ -410,9 +476,11 @@ const mcp = new Server(
     instructions: [
       'The sender reads LINE, not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
       '',
-      'Messages from LINE arrive as <channel source="line" user_id="..." message_id="..." user="..." ts="...">. Reply with the reply tool — pass user_id back.',
+      'Messages from LINE arrive as <channel source="line" chat_id="..." user_id="..." message_id="..." user="..." ts="...">. Reply with the reply tool — pass user_id back.',
       '',
       'LINE reply tokens expire ~1 minute. The plugin tries reply first (free), then falls back to push message (monthly quota). Keep replies prompt.',
+      '',
+      "If a user uses LINE's native quote-reply, the inbound <channel> tag carries reply_to_id, reply_to_user, reply_to_is_self, and (truncated) reply_to_content — use those to figure out what the short reply is about. If reply_to_content is empty, the quoted message predates the plugin's in-memory cache.",
       '',
       "LINE's Messaging API has no history or search — you only see messages as they arrive. If you need earlier context, ask the user to paste it or summarize.",
       '',
@@ -469,9 +537,25 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const chunks = chunk(text, MAX_CHUNK_LIMIT)
         const messages = chunks.map((c) => ({ type: 'text', text: c }))
 
+        // Record each successfully-sent outbound message in the cache
+        // so future quote-replies can resolve it.
+        const recordSent = (sentIds: string[], chatId: string): void => {
+          const now = new Date().toISOString()
+          for (let i = 0; i < sentIds.length; i++) {
+            cacheMessage(sentIds[i], {
+              text: truncateForQuote(chunks[i] ?? ''),
+              user: '(bot)',
+              userId: 'bot',
+              chatId,
+              ts: now,
+              isSelf: true,
+            })
+          }
+        }
+
         // Try reply token first (free)
-        const token = consumeReplyToken(userId)
-        if (token) {
+        const tokenEntry = consumeReplyToken(userId)
+        if (tokenEntry) {
           // LINE reply API accepts up to 5 messages per call
           const batches: Array<typeof messages> = []
           for (let i = 0; i < messages.length; i += 5) {
@@ -479,15 +563,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           }
 
           let success = true
+          const allSentIds: string[] = []
           for (const batch of batches) {
-            const ok = await lineReply(token, batch)
-            if (!ok) {
+            const ids = await lineReply(tokenEntry.token, batch)
+            if (!ids) {
               success = false
               break
             }
+            allSentIds.push(...ids)
           }
 
           if (success) {
+            recordSent(allSentIds, tokenEntry.chatId)
             return {
               content: [
                 {
@@ -500,13 +587,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Reply failed (token expired) — fall through to push
         }
 
-        // Fallback to push message
+        // Fallback to push message (falls back to userId as destination)
+        const pushedIds: string[] = []
         for (const msg of messages) {
-          const ok = await linePush(userId, [msg])
-          if (!ok) {
+          const ids = await linePush(userId, [msg])
+          if (!ids) {
             throw new Error('push message failed — check quota or user_id')
           }
+          pushedIds.push(...ids)
         }
+        recordSent(pushedIds, userId)
 
         return {
           content: [
@@ -524,11 +614,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         assertAllowedChat(userId)
 
         const chunks = chunk(text, MAX_CHUNK_LIMIT)
+        const sentIds: string[] = []
         for (const c of chunks) {
-          const ok = await linePush(userId, [{ type: 'text', text: c }])
-          if (!ok) {
+          const ids = await linePush(userId, [{ type: 'text', text: c }])
+          if (!ids) {
             throw new Error('push message failed — check quota or user_id')
           }
+          sentIds.push(...ids)
+        }
+
+        // Record outbound for future quote-reply resolution
+        const now = new Date().toISOString()
+        for (let i = 0; i < sentIds.length; i++) {
+          cacheMessage(sentIds[i], {
+            text: truncateForQuote(chunks[i] ?? ''),
+            user: '(bot)',
+            userId: 'bot',
+            chatId: userId,
+            ts: now,
+            isSelf: true,
+          })
         }
 
         return {
@@ -588,6 +693,8 @@ async function handleWebhook(req: Request): Promise<Response> {
         id: string
         type: string
         text?: string
+        quotedMessageId?: string
+        quoteToken?: string
         contentProvider?: { type: string }
       }
       timestamp?: number
@@ -615,9 +722,11 @@ async function handleWebhook(req: Request): Promise<Response> {
           ? event.source.roomId!
           : userId
 
-    // Cache reply token for the reply tool
+    // Cache reply token for the reply tool (paired with chatId so
+    // outbound messages sent via this token get cached against the
+    // right chat context)
     if (event.replyToken) {
-      cacheReplyToken(userId, event.replyToken)
+      cacheReplyToken(userId, event.replyToken, chatId)
     }
 
     // Gate check — for groups/rooms, the gate needs chatId (groupId/roomId),
@@ -676,6 +785,47 @@ async function handleWebhook(req: Request): Promise<Response> {
 
     // Get display name for context
     const displayName = await lineGetProfile(userId)
+    const ts = new Date(event.timestamp ?? Date.now()).toISOString()
+
+    // Cache this inbound message so future quote-replies can resolve it
+    cacheMessage(msg.id, {
+      text: truncateForQuote(text),
+      user: displayName ?? userId,
+      userId,
+      chatId,
+      ts,
+      isSelf: false,
+    })
+
+    // Resolve quote-reply context if present
+    let replyTo:
+      | {
+          reply_to_id: string
+          reply_to_content: string
+          reply_to_user: string
+          reply_to_is_self: boolean
+        }
+      | undefined
+    if (msg.quotedMessageId) {
+      const quoted = lookupQuoted(msg.quotedMessageId)
+      if (quoted) {
+        replyTo = {
+          reply_to_id: msg.quotedMessageId,
+          reply_to_content: quoted.text,
+          reply_to_user: quoted.user,
+          reply_to_is_self: quoted.isSelf,
+        }
+      } else {
+        // Quote points at a message we never saw (e.g., predates cache
+        // or was evicted). Still pass the id so downstream can decide.
+        replyTo = {
+          reply_to_id: msg.quotedMessageId,
+          reply_to_content: '',
+          reply_to_user: '',
+          reply_to_is_self: false,
+        }
+      }
+    }
 
     void mcp
       .notification({
@@ -687,8 +837,9 @@ async function handleWebhook(req: Request): Promise<Response> {
             user_id: userId,
             message_id: msg.id,
             user: displayName ?? userId,
-            ts: new Date(event.timestamp ?? Date.now()).toISOString(),
+            ts,
             ...(imagePath ? { image_path: imagePath } : {}),
+            ...(replyTo ?? {}),
           },
         },
       })
