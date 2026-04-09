@@ -1,0 +1,11 @@
+{
+  "name": "line",
+  "description": "LINE channel for Claude Code — messaging bridge with built-in access control via webhook.",
+  "version": "0.0.1",
+  "keywords": [
+    "line",
+    "messaging",
+    "channel",
+    "mcp"
+  ]
+}
