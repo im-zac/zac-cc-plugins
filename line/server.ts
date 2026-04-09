@@ -620,8 +620,9 @@ async function handleWebhook(req: Request): Promise<Response> {
       cacheReplyToken(userId, event.replyToken)
     }
 
-    // Gate check
-    const result = gate(userId, sourceType)
+    // Gate check — for groups/rooms, the gate needs chatId (groupId/roomId),
+    // not the sender's userId. For DMs, chatId === userId so both work.
+    const result = gate(chatId, sourceType)
 
     if (result.action === 'drop') continue
 
