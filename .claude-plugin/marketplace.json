@@ -20,6 +20,19 @@
         "channel",
         "interactive"
       ]
+    },
+    {
+      "name": "line",
+      "description": "LINE channel for Claude Code — messaging bridge with built-in access control via webhook.",
+      "version": "0.0.1",
+      "source": "./line",
+      "category": "productivity",
+      "tags": [
+        "line",
+        "messaging",
+        "channel",
+        "mcp"
+      ]
     }
   ]
 }
